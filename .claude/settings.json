@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "lsof -p 79496 2>/dev/null | head -5; echo \"---\"; ps -o pid,ppid,command -p 79496 2>/dev/null; echo \"===\"; ps -o pid,ppid,command -p 49583,79913 2>/dev/null(*)",
+      "ps -o pid,ppid,command -p 79259 2>/dev/null; echo \"---\"; pstree -p 79259 2>/dev/null || ps -o pid,ppid,command $(ps -o pid,ppid -p 79496,79912 2>/dev/null | awk 'NR>1{print $2}' | sort -u) 2>/dev/null(*)",
+      "Ready to code?(*)"
+    ],
+    "deny": []
+  }
+}
