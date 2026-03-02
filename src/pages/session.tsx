@@ -5,6 +5,7 @@ import {
   createSession,
   handleChat,
   handleRun,
+  handleStart,
   listSessionArtifacts,
   getSessionAssignment,
   sseResponse,
@@ -49,10 +50,6 @@ export function logEntryHtml(cls: string, content: string, opts?: { id?: string;
   const idAttr = opts?.id ? ` id="${opts.id}"` : "";
   const oobAttr = opts?.oob ? ` hx-swap-oob="outerHTML"` : "";
   return `<div${idAttr}${oobAttr} class="py-0.5 text-xs ${color}">${content}</div>`;
-}
-
-export function summaryBlockHtml(text: string): string {
-  return `<div class="my-2 p-3 bg-gray-900 border-l-2 border-yellow-500 rounded-r text-xs text-gray-300 leading-relaxed">${esc(text)}</div>`;
 }
 
 export interface LiveProgress {
@@ -174,6 +171,35 @@ function ChatPhase({ name, session }: { name: string; session: ActiveSession }) 
   );
 }
 
+function ReviewPhase({ name, session }: { name: string; session: ActiveSession }) {
+  return (
+    <Layout title={`Review — Consilium`}>
+      <main class="max-w-2xl mx-auto p-5">
+        <a href="/" class="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-200 no-underline mb-3">
+          <span>&#8249;</span> sessions
+        </a>
+        <h2 class="text-sm font-semibold text-gray-400 mb-4">Review &amp; Start</h2>
+        <form method="POST" action={`/sessions/${encodeURIComponent(name)}/start`}>
+          <div class="mb-3">
+            <label class="block text-gray-500 text-[10px] uppercase tracking-wide mb-1">Session Name</label>
+            <input type="text" name="session_name" value={esc(session.reviewName || "")}
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:border-blue-500 focus:outline-none" />
+          </div>
+          <div class="mb-4">
+            <label class="block text-gray-500 text-[10px] uppercase tracking-wide mb-1">Problem</label>
+            <textarea name="problem" rows={20}
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 font-mono leading-relaxed resize-y focus:border-blue-500 focus:outline-none"
+            >{esc(session.reviewProblem || "")}</textarea>
+          </div>
+          <button type="submit" class="px-5 py-2 bg-green-600 text-white text-xs font-semibold rounded hover:bg-green-500">
+            Start Deliberation &rarr;
+          </button>
+        </form>
+      </main>
+    </Layout>
+  );
+}
+
 function ProgressPhase({ name }: { name: string }) {
   const eventsUrl = `/sessions/${encodeURIComponent(name)}/events`;
   return (
@@ -226,6 +252,9 @@ async function sessionPage(req: Request) {
     if (session.phase === "chat") {
       return html(<ChatPhase name={name} session={session} />);
     }
+    if (session.phase === "review") {
+      return html(<ReviewPhase name={name} session={session} />);
+    }
     return html(<ProgressPhase name={name} />);
   }
 
@@ -246,12 +275,24 @@ async function postCreateSession(req: Request) {
   const supervisor = (form.get("supervisor") as string) || "claude";
   const reporter = (form.get("reporter") as string) || "claude";
 
+  const { getDefaults } = await import("../prompts.ts");
+  const d = getDefaults();
+  const prompts = {
+    problem: "",
+    analyst: (form.get("analyst_prompt") as string) || d.analyst,
+    round1: (form.get("round1") as string) || d.round1,
+    round2: (form.get("round2") as string) || d.round2,
+    round3: (form.get("round3") as string) || d.round3,
+    summary: (form.get("summary") as string) || d.summary,
+    report: (form.get("report") as string) || d.report,
+  };
+
   const name = createSession({
     analyst: analyst as any,
     supervisor: supervisor as any,
     reporter: reporter as any,
     participants: agents as any[],
-  });
+  }, prompts);
 
   return Response.redirect(`/sessions/${encodeURIComponent(name)}`, 303);
 }
@@ -270,6 +311,19 @@ async function postRun(req: Request) {
   const name = decodeURIComponent(url.pathname.split("/sessions/")[1]!.split("/")[0]!);
   handleRun(name);
   return new Response(null, { status: 204 });
+}
+
+async function postStart(req: Request) {
+  const url = new URL(req.url);
+  const name = decodeURIComponent(url.pathname.split("/sessions/")[1]!.split("/")[0]!);
+  const form = await req.formData();
+  const sessionName = ((form.get("session_name") as string) || "").trim() || "unknown";
+  const problem = ((form.get("problem") as string) || "").trim();
+  const fullName = await handleStart(name, sessionName, problem);
+  if (fullName) {
+    return Response.redirect(`/sessions/${encodeURIComponent(fullName)}`, 303);
+  }
+  return Response.redirect(`/sessions/${encodeURIComponent(name)}`, 303);
 }
 
 export async function getArtifact(req: Request) {
@@ -296,4 +350,5 @@ export const routes: Record<string, any> = {
   "/sessions/:name/events": sessionEvents,
   "/sessions/:name/chat": { POST: postChat },
   "/sessions/:name/run": { POST: postRun },
+  "/sessions/:name/start": { POST: postStart },
 };

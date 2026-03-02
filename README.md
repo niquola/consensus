@@ -44,7 +44,15 @@ bun src/web.ts
 # → http://localhost:3000
 ```
 
-Create a session, pick which agents participate, chat with the analyst to define your problem, then run. Progress and artifacts appear in the sidebar. You can run multiple sessions in parallel and switch between them.
+Create a session, pick which agents participate, customize prompt templates, chat with the analyst to define your problem, review the generated problem statement, then run. Progress and artifacts appear in the sidebar. You can run multiple sessions in parallel and switch between them.
+
+#### Session flow
+
+1. **New Session** — pick agents, roles (analyst/supervisor/reporter), edit prompt templates (tabbed UI)
+2. **Chat** — conversation with the AI analyst to define your problem
+3. **Review** — edit the session name and problem statement before launching agents
+4. **Run** — all 3 rounds execute automatically, progress shown as spinners in the sidebar
+5. **Done** — browse artifacts, click to view rendered markdown
 
 ### CLI
 
@@ -69,6 +77,7 @@ Sessions are saved to `sessions/<date>-<name>/`:
 ```
 sessions/2026-03-02-kv-store/
   problem.md              # structured problem
+  prompts.md              # all prompt templates used (editable defaults from src/prompts.md)
   assignment.json         # agent label → model mapping
   meta.json               # timing, config
   r1/a/solution.md        # round 1 solutions
@@ -78,3 +87,9 @@ sessions/2026-03-02-kv-store/
   r3/...                  # round 3
   final-report.md         # consensus report
 ```
+
+## Customizing prompts
+
+Default prompt templates live in `src/prompts.md` with `--- section ---` separators. Edit this file to change defaults globally. Per-session overrides are available in the New Session form (tabbed prompt editor). Each session saves its prompts to `prompts.md` in the session directory.
+
+Placeholders in templates: `{problem}`, `{peer_solutions}`, `{own_solution}`, `{solutions}`, `{rounds}`.

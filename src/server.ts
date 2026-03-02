@@ -8,8 +8,10 @@ import {
   buildRound3Prompt,
   buildRoundSummaryPrompt,
   buildFinalReportPrompt,
+  serializePrompts,
   DETECT_LANGUAGE_PROMPT,
   type RoundHistory,
+  type SessionPrompts,
 } from "./prompts.ts";
 import { createSSERegistry, sseResponse as createSSEResponse } from "./lib/sse.ts";
 import { esc } from "./lib/html.ts";
@@ -107,11 +109,14 @@ export interface ActiveSession {
   sessionDir: string | null;
   lang: string | null;
   meta: SessionMeta | null;
-  phase: "chat" | "running" | "done";
+  phase: "chat" | "review" | "running" | "done";
+  reviewName: string | null;     // proposed session name from analyst
+  reviewProblem: string | null;  // proposed problem text from analyst
   currentRound: number;
   logEntries: string[];
   workingAgents: Set<string>;   // "1-a", "2-b", "report"
   summarizing: number | null;
+  prompts: SessionPrompts | null;
 }
 
 export interface Artifact {
@@ -203,7 +208,7 @@ export function sseResponse(name: string): Response {
 
 // ── Session lifecycle ──
 
-export function createSession(config: SessionConfig): string {
+export function createSession(config: SessionConfig, prompts: SessionPrompts): string {
   const ts = Date.now().toString(36);
   const name = `pending-${ts}`;
   activeSessions.set(name, {
@@ -214,10 +219,13 @@ export function createSession(config: SessionConfig): string {
     lang: null,
     meta: null,
     phase: "chat",
+    reviewName: null,
+    reviewProblem: null,
     currentRound: 0,
     logEntries: [],
     workingAgents: new Set(),
     summarizing: null,
+    prompts,
   });
   return name;
 }
@@ -259,7 +267,7 @@ export async function handleChat(name: string, text: string) {
     });
   }
 
-  const prompt = buildAnalystChatPrompt(session.chatHistory, session.lang || undefined);
+  const prompt = buildAnalystChatPrompt(session.chatHistory, session.lang || undefined, session.prompts?.analyst);
   const response = await session.analystAgent.prompt(prompt);
   session.chatHistory.push({ role: "assistant", text: response });
   broadcast(name, "chat-stream", "");
@@ -272,7 +280,7 @@ export async function handleRun(name: string) {
   const session = activeSessions.get(name);
   if (!session || session.phase !== "chat") return;
 
-  const finalPrompt = buildAnalystChatPrompt(session.chatHistory, session.lang || undefined) +
+  const finalPrompt = buildAnalystChatPrompt(session.chatHistory, session.lang || undefined, session.prompts?.analyst) +
     "\n\nThe user is ready. Output the final structured problem now using the ---NAME--- and ---PROBLEM--- format.";
 
   const output = await session.analystAgent!.prompt(finalPrompt);
@@ -280,30 +288,49 @@ export async function handleRun(name: string) {
   session.analystAgent = null;
 
   const { name: probName, problem } = parseAnalystOutput(output);
-  const date = new Date().toISOString().slice(0, 10);
-  const sessionName = `${date}-${probName}`;
-  session.sessionDir = resolve(process.cwd(), "sessions", sessionName);
 
   if (!session.lang) {
     try { session.lang = await detectLanguage(problem, session.config.analyst); } catch {}
   }
 
+  // Store proposed name/problem and go to review phase
+  session.reviewName = probName;
+  session.reviewProblem = problem;
+  session.phase = "review";
+
+  // Redirect to same session (now shows review form)
+  broadcast(name, "redirect", `/sessions/${encodeURIComponent(name)}`);
+}
+
+// ── Start (from review phase) ──
+
+export async function handleStart(name: string, sessionName: string, problem: string) {
+  const session = activeSessions.get(name);
+  if (!session || session.phase !== "review") return;
+
+  const date = new Date().toISOString().slice(0, 10);
+  const fullName = `${date}-${sessionName}`;
+  session.sessionDir = resolve(process.cwd(), "sessions", fullName);
+
   await ensureDir(session.sessionDir);
   await writeFileSafe(resolve(session.sessionDir, "problem.md"), problem);
 
+  // Fill problem into prompts and save
+  session.prompts!.problem = problem;
+  await writeFileSafe(resolve(session.sessionDir, "prompts.md"), serializePrompts(session.prompts!));
+
   // Rename session in activeSessions
   activeSessions.delete(name);
-  activeSessions.set(sessionName, session);
+  activeSessions.set(fullName, session);
 
   session.phase = "running";
 
-  // Tell client to redirect to the new session URL via SSE
-  broadcast(name, "redirect", `/sessions/${encodeURIComponent(sessionName)}`);
-
   // Run consensus async
-  runConsensus(sessionName, session, problem).catch(err => {
-    broadcastLog(sessionName, logEntryHtml("error", `Error: ${esc(err.message || String(err))}`));
+  runConsensus(fullName, session, problem).catch(err => {
+    broadcastLog(fullName, logEntryHtml("error", `Error: ${esc(err.message || String(err))}`));
   });
+
+  return fullName;
 }
 
 // ── Consensus pipeline ──
@@ -390,7 +417,7 @@ async function roundSummary(name: string, solutions: Map<string, string>, round:
 
   const summarizer = createAgent(model, process.cwd());
   try {
-    const summary = await summarizer.prompt(buildRoundSummaryPrompt(solutions, lang));
+    const summary = await summarizer.prompt(buildRoundSummaryPrompt(solutions, lang, session?.prompts?.summary));
     await writeFileSafe(resolve(baseDir, `r${round}`, "summary.md"), summary);
   } finally {
     await summarizer.close();
@@ -403,6 +430,7 @@ async function runConsensus(name: string, session: ActiveSession, problem: strin
   const config = session.config;
   const baseDir = session.sessionDir!;
   const lang = session.lang || undefined;
+  const prompts = session.prompts;
   const sessionStart = Date.now();
 
   session.meta = { startedAt: new Date().toISOString(), lang, config, rounds: [] };
@@ -445,7 +473,8 @@ async function runConsensus(name: string, session: ActiveSession, problem: strin
 
   try {
     // Round 1: Solve
-    let { solutions, failed } = await executeRound(1, "Solve", () => buildRound1Prompt(problem, lang));
+    let { solutions, failed } = await executeRound(1, "Solve", () =>
+      buildRound1Prompt(problem, lang, prompts?.round1));
     allFailed.push(...failed.map(l => `r1:${l}`));
     allRounds.push({ round: 1, title: "Solve", solutions: new Map(solutions) });
 
@@ -454,7 +483,7 @@ async function runConsensus(name: string, session: ActiveSession, problem: strin
     ({ solutions, failed } = await executeRound(2, "Improve", (label) => {
       const otherLabels = shuffle(labels.filter(l => l !== label));
       const peerSolutions = otherLabels.map(l => r1Solutions.get(l)!).filter(Boolean);
-      return buildRound2Prompt(problem, peerSolutions, lang);
+      return buildRound2Prompt(problem, peerSolutions, lang, prompts?.round2);
     }));
     allFailed.push(...failed.map(l => `r2:${l}`));
     allRounds.push({ round: 2, title: "Improve", solutions: new Map(solutions) });
@@ -465,7 +494,7 @@ async function runConsensus(name: string, session: ActiveSession, problem: strin
       const ownSolution = r2Solutions.get(label) || "";
       const otherLabels = shuffle(labels.filter(l => l !== label));
       const peerSolutions = otherLabels.map(l => r2Solutions.get(l)!).filter(Boolean);
-      return buildRound3Prompt(problem, ownSolution, peerSolutions, lang);
+      return buildRound3Prompt(problem, ownSolution, peerSolutions, lang, prompts?.round3);
     }));
     allFailed.push(...failed.map(l => `r3:${l}`));
     allRounds.push({ round: 3, title: "Defend", solutions: new Map(solutions) });
@@ -486,7 +515,7 @@ async function runConsensus(name: string, session: ActiveSession, problem: strin
 
       const reporter = createAgent(config.reporter, process.cwd());
       try {
-        const report = await reporter.prompt(buildFinalReportPrompt(problem, allRounds, lang));
+        const report = await reporter.prompt(buildFinalReportPrompt(problem, allRounds, lang, prompts?.report));
         await writeFileSafe(resolve(baseDir, "final-report.md"), report);
         await writeFileSafe(resolve(reportDir, "final-report.md"), report);
       } finally {

@@ -2,6 +2,7 @@ import { Layout, html } from "../layout.tsx";
 import { listSessions, activeSessions, type SessionInfo } from "../server.ts";
 import { ALL_AGENTS } from "../agent.ts";
 import { esc } from "../lib/html.ts";
+import { getDefaults } from "../prompts.ts";
 
 function formatMs(ms?: number): string {
   if (!ms) return "";
@@ -66,6 +67,15 @@ function agentOptions() {
   return ALL_AGENTS.map(a => `<option value="${a}"${a === "claude" ? " selected" : ""}>${a}</option>`).join("");
 }
 
+const PROMPT_TABS = [
+  { key: "analyst_prompt", field: "analyst", label: "Analyst" },
+  { key: "round1", field: "round1", label: "Round 1" },
+  { key: "round2", field: "round2", label: "Round 2" },
+  { key: "round3", field: "round3", label: "Round 3" },
+  { key: "summary", field: "summary", label: "Summary" },
+  { key: "report", field: "report", label: "Report" },
+] as const;
+
 function NewSessionPage() {
   const agents = ALL_AGENTS;
   const opts = agentOptions();
@@ -104,6 +114,21 @@ function NewSessionPage() {
             <div>
               <label class="block text-gray-500 text-[10px] uppercase tracking-wide mb-1">Reporter</label>
               <select name="reporter" class="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:border-blue-500 focus:outline-none">{opts}</select>
+            </div>
+          </div>
+          <div class="mb-4">
+            <label class="block text-gray-500 text-[10px] uppercase tracking-wide mb-2">Prompt Templates</label>
+            <div class="border border-gray-800 rounded">
+              <div class="flex border-b border-gray-800" id="prompt-tabs">
+                {PROMPT_TABS.map((t, i) =>
+                  `<button type="button" class="px-3 py-1.5 text-xs ${i === 0 ? 'text-blue-400 border-b border-blue-400' : 'text-gray-500 hover:text-gray-300'}" onclick="document.querySelectorAll('#prompt-tabs button').forEach(b=>{b.className='px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300'});this.className='px-3 py-1.5 text-xs text-blue-400 border-b border-blue-400';document.querySelectorAll('.prompt-panel').forEach(p=>p.style.display='none');document.getElementById('panel-${t.key}').style.display='block'">${t.label}</button>`
+                )}
+              </div>
+              {PROMPT_TABS.map((t, i) => {
+                const d = getDefaults();
+                const val = d[t.field] || "";
+                return `<div id="panel-${t.key}" class="prompt-panel" style="${i === 0 ? '' : 'display:none'}"><textarea name="${t.key}" rows="30" class="w-full px-3 py-2 bg-gray-900 text-xs text-gray-300 font-mono leading-relaxed resize-y focus:outline-none">${esc(val)}</textarea></div>`;
+              })}
             </div>
           </div>
           <button type="submit" class="px-5 py-2 bg-blue-600 text-white text-xs font-semibold rounded hover:bg-blue-500">
