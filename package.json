@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "bin": {
-    "consilium": "./src/index.ts"
+    "consensus": "./src/index.ts"
   },
   "scripts": {
     "start": "bun src/index.ts"
