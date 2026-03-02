@@ -5,7 +5,6 @@ import {
   createSession,
   handleChat,
   handleRun,
-  handleContinue,
   listSessionArtifacts,
   getSessionAssignment,
   sseResponse,
@@ -54,15 +53,6 @@ export function logEntryHtml(cls: string, content: string, opts?: { id?: string;
 
 export function summaryBlockHtml(text: string): string {
   return `<div class="my-2 p-3 bg-gray-900 border-l-2 border-yellow-500 rounded-r text-xs text-gray-300 leading-relaxed">${esc(text)}</div>`;
-}
-
-export function continueButtonHtml(name: string, round: number): string {
-  const nextRound = round + 1;
-  const names: Record<number, string> = { 2: "Improve", 3: "Defend" };
-  const nextName = names[nextRound] || `Round ${nextRound}`;
-  return `<form hx-post="/sessions/${encodeURIComponent(name)}/continue" hx-swap="none" class="my-2">
-    <button type="submit" class="w-full px-2 py-1.5 bg-blue-600 text-white text-[11px] font-semibold rounded hover:bg-blue-500">Continue to ${nextName} &rarr;</button>
-  </form>`;
 }
 
 export interface LiveProgress {
@@ -191,7 +181,6 @@ function ProgressPhase({ name }: { name: string }) {
       sidebar={
         <div hx-ext="sse" sse-connect={eventsUrl}>
           <div id="artifacts" sse-swap="artifacts" hx-swap="innerHTML"></div>
-          <div id="continue" sse-swap="continue" hx-swap="innerHTML"></div>
         </div>
       }>
       <div id="content" class="prose-sm">
@@ -283,13 +272,6 @@ async function postRun(req: Request) {
   return new Response(null, { status: 204 });
 }
 
-async function postContinue(req: Request) {
-  const url = new URL(req.url);
-  const name = decodeURIComponent(url.pathname.split("/sessions/")[1]!.split("/")[0]!);
-  handleContinue(name);
-  return new Response(null, { status: 204 });
-}
-
 export async function getArtifact(req: Request) {
   const url = new URL(req.url);
   const parts = url.pathname.match(/^\/sessions\/([^/]+)\/artifact\/(.+)$/);
@@ -314,5 +296,4 @@ export const routes: Record<string, any> = {
   "/sessions/:name/events": sessionEvents,
   "/sessions/:name/chat": { POST: postChat },
   "/sessions/:name/run": { POST: postRun },
-  "/sessions/:name/continue": { POST: postContinue },
 };

@@ -18,7 +18,6 @@ import {
   chatMsgHtml,
   streamHtml,
   logEntryHtml,
-  continueButtonHtml,
   artifactsSidebarHtml,
 } from "./pages/session.tsx";
 
@@ -108,10 +107,9 @@ export interface ActiveSession {
   sessionDir: string | null;
   lang: string | null;
   meta: SessionMeta | null;
-  phase: "chat" | "running" | "paused" | "done";
+  phase: "chat" | "running" | "done";
   currentRound: number;
   logEntries: string[];
-  continueResolve: (() => void) | null;
   workingAgents: Set<string>;   // "1-a", "2-b", "report"
   summarizing: number | null;
 }
@@ -187,12 +185,6 @@ export function sseResponse(name: string): Response {
             try { controller.enqueue(new TextEncoder().encode(payload)); } catch {}
           });
         });
-        // If paused, resend continue button
-        if (session.phase === "paused" && session.currentRound > 0) {
-          const html = continueButtonHtml(name, session.currentRound);
-          const payload = `event: continue\ndata: ${html.split("\n").map(l => l).join("\ndata: ")}\n\n`;
-          try { controller.enqueue(new TextEncoder().encode(payload)); } catch {}
-        }
       }
     },
     cancel() {
@@ -224,7 +216,6 @@ export function createSession(config: SessionConfig): string {
     phase: "chat",
     currentRound: 0,
     logEntries: [],
-    continueResolve: null,
     workingAgents: new Set(),
     summarizing: null,
   });
@@ -313,17 +304,6 @@ export async function handleRun(name: string) {
   runConsensus(sessionName, session, problem).catch(err => {
     broadcastLog(sessionName, logEntryHtml("error", `Error: ${esc(err.message || String(err))}`));
   });
-}
-
-// ── Continue ──
-
-export function handleContinue(name: string) {
-  const session = activeSessions.get(name);
-  if (session?.continueResolve) {
-    session.continueResolve();
-    session.continueResolve = null;
-    session.phase = "running";
-  }
 }
 
 // ── Consensus pipeline ──
@@ -419,13 +399,6 @@ async function roundSummary(name: string, solutions: Map<string, string>, round:
   }
 }
 
-function waitForContinue(name: string, session: ActiveSession, round: number): Promise<void> {
-  session.phase = "paused";
-  session.currentRound = round;
-  broadcast(name, "continue", continueButtonHtml(name, round));
-  return new Promise((resolve) => { session.continueResolve = resolve; });
-}
-
 async function runConsensus(name: string, session: ActiveSession, problem: string) {
   const config = session.config;
   const baseDir = session.sessionDir!;
@@ -467,9 +440,6 @@ async function runConsensus(name: string, session: ActiveSession, problem: strin
     roundMeta.elapsedMs = Date.now() - roundStart;
     await saveMeta(session);
 
-    if (round < 3) {
-      await waitForContinue(name, session, round);
-    }
     return { solutions, failed };
   }
 
