@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+.shiki {
+  border-radius: 6px;
+  overflow-x: auto;
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: ui-monospace, "JetBrains Mono", Menlo, Monaco, monospace;
+  margin: 8px 0;
+}
+
+.shiki code {
+  font-family: inherit;
+  background: transparent !important;
+  padding: 0 !important;
+  border: none !important;
+  font-size: inherit;
+}

@@ -6,6 +6,11 @@
     "module": "Preserve",
     "moduleDetection": "force",
     "jsx": "react-jsx",
+    "jsxImportSource": "jsx",
+    "paths": {
+      "jsx/jsx-runtime": ["./src/lib/jsx/jsx-runtime.ts"],
+      "jsx/jsx-dev-runtime": ["./src/lib/jsx/jsx-dev-runtime.ts"]
+    },
     "allowJs": true,
 
     // Bundler mode
