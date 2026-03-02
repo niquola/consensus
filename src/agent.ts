@@ -1,10 +1,40 @@
 import { $ } from "bun";
+import { AcpAgentProcess, ACP_CONFIGS } from "./acp";
 
-export type AgentType = "claude" | "codex" | "gemini" | "kimi";
+export type AgentType = "claude" | "codex" | "gemini" | "kimi" | "opencode";
 
 export interface Agent {
   name: AgentType;
-  run(workDir: string, prompt: string): Promise<string>;
+  prompt(text: string): Promise<string>;
+  close(): Promise<void>;
+}
+
+export const ALL_AGENTS: AgentType[] = ["claude", "codex", "gemini", "kimi", "opencode"];
+export const AGENT_LABELS = ["a", "b", "c", "d", "e"] as const;
+export type AgentLabel = (typeof AGENT_LABELS)[number];
+
+/** ACP-based agent — long-lived subprocess with session */
+export class AcpAgent implements Agent {
+  name: AgentType;
+  private process: AcpAgentProcess;
+  private ready: Promise<void>;
+
+  constructor(name: AgentType, cwd: string, onChunk?: (text: string) => void) {
+    this.name = name;
+    const config = ACP_CONFIGS[name];
+    if (!config) throw new Error(`No ACP config for agent: ${name}`);
+    this.process = new AcpAgentProcess(config, cwd, onChunk);
+    this.ready = this.process.initialize().then(() => this.process.createSession(cwd));
+  }
+
+  async prompt(text: string): Promise<string> {
+    await this.ready;
+    return this.process.prompt(text);
+  }
+
+  async close(): Promise<void> {
+    await this.process.close();
+  }
 }
 
 /** Clean env: remove vars that prevent nesting */
@@ -19,66 +49,57 @@ function cleanEnv(): Record<string, string> {
 
 const LOCAL_BIN = `${process.env.HOME}/.local/bin`;
 
-const claude: Agent = {
-  name: "claude",
-  async run(workDir, prompt) {
-    const result =
-      await $`${LOCAL_BIN}/claude -p ${prompt} --dangerously-skip-permissions`
-        .cwd(workDir)
-        .env(cleanEnv())
-        .text();
+/** Legacy subprocess agent — one-shot CLI invocation, for fallback */
+export class LegacyAgent implements Agent {
+  name: AgentType;
+  private cwd: string;
+
+  constructor(name: AgentType, cwd: string) {
+    this.name = name;
+    this.cwd = cwd;
+  }
+
+  async prompt(text: string): Promise<string> {
+    const env = cleanEnv();
+    let result: string;
+
+    switch (this.name) {
+      case "claude":
+        result = await $`${LOCAL_BIN}/claude -p ${text} --dangerously-skip-permissions`
+          .cwd(this.cwd).env(env).text();
+        break;
+      case "codex":
+        result = await $`codex exec ${text} -C ${this.cwd} --dangerously-bypass-approvals-and-sandbox`
+          .cwd(this.cwd).env(env).text();
+        break;
+      case "gemini":
+        result = await $`gemini -p ${text} --yolo`
+          .cwd(this.cwd).env(env).text();
+        break;
+      case "kimi":
+        result = await $`echo ${text} | ${LOCAL_BIN}/kimi --print --final-message-only -w ${this.cwd}`
+          .cwd(this.cwd).env(env).text();
+        break;
+      case "opencode":
+        result = await $`opencode run -m zai-coding-plan/glm-5 ${text}`
+          .cwd(this.cwd).env(env).text();
+        break;
+      default:
+        throw new Error(`Unknown agent: ${this.name}`);
+    }
+
     return result.trim();
-  },
-};
+  }
 
-const codex: Agent = {
-  name: "codex",
-  async run(workDir, prompt) {
-    const result =
-      await $`codex exec ${prompt} -C ${workDir} --dangerously-bypass-approvals-and-sandbox`
-        .cwd(workDir)
-        .env(cleanEnv())
-        .text();
-    return result.trim();
-  },
-};
-
-const gemini: Agent = {
-  name: "gemini",
-  async run(workDir, prompt) {
-    const result =
-      await $`gemini -p ${prompt} --yolo`
-        .cwd(workDir)
-        .env(cleanEnv())
-        .text();
-    return result.trim();
-  },
-};
-
-const kimi: Agent = {
-  name: "kimi",
-  async run(workDir, prompt) {
-    const result =
-      await $`echo ${prompt} | ${LOCAL_BIN}/kimi --print --final-message-only -w ${workDir}`
-        .cwd(workDir)
-        .env(cleanEnv())
-        .text();
-    return result.trim();
-  },
-};
-
-const agents: Record<AgentType, Agent> = { claude, codex, gemini, kimi };
-
-export const ALL_AGENTS: AgentType[] = ["claude", "codex", "gemini", "kimi"];
-export const AGENT_LABELS = ["a", "b", "c", "d"] as const;
-export type AgentLabel = (typeof AGENT_LABELS)[number];
-
-export function getAgent(name: AgentType): Agent {
-  const agent = agents[name];
-  if (!agent) throw new Error(`Unknown agent: ${name}`);
-  return agent;
+  async close(): Promise<void> {
+    // No-op for one-shot processes
+  }
 }
 
-export function getAgents(names: AgentType[]): Agent[] {
-  return names.map(getAgent);
+/** Create an agent — ACP by default, legacy with CONSILIUM_LEGACY=1 */
+export function createAgent(name: AgentType, cwd: string, onChunk?: (text: string) => void): Agent {
+  if (process.env.CONSILIUM_LEGACY === "1") {
+    return new LegacyAgent(name, cwd);
+  }
+  return new AcpAgent(name, cwd, onChunk);
 }

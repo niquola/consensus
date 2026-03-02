@@ -1,8 +1,26 @@
-import { mkdir, copyFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { resolve, dirname, basename } from "node:path";
 import { createInterface } from "node:readline";
-import { getAgent, ALL_AGENTS, AGENT_LABELS, type AgentType, type AgentLabel } from "./agent";
-import { ANALYST_SYSTEM, ROUND1_PROMPT, ROUND2_PROMPT, ROUND_SUMMARY_PROMPT, FINAL_REPORT_PROMPT } from "./prompts";
+import { createAgent, ALL_AGENTS, AGENT_LABELS, type AgentType, type AgentLabel, type Agent } from "./agent";
+
+/** Parse --agents=claude,gemini,kimi from argv, return remaining args */
+function parseArgs(argv: string[]): { agents: AgentType[]; rest: string } {
+  const agentsFlag = argv.find(a => a.startsWith("--agents="));
+  if (agentsFlag) {
+    const names = agentsFlag.split("=")[1]!.split(",") as AgentType[];
+    const rest = argv.filter(a => !a.startsWith("--agents=")).join(" ").trim();
+    return { agents: names, rest };
+  }
+  return { agents: ALL_AGENTS, rest: argv.join(" ").trim() };
+}
+import {
+  ANALYST_SYSTEM,
+  buildRound1Prompt,
+  buildRound2Prompt,
+  buildRoundSummaryPrompt,
+  buildFinalReportPrompt,
+  type RoundHistory,
+} from "./prompts";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
@@ -32,15 +50,18 @@ function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+    const tmp = a[i]!;
+    a[i] = a[j]!;
+    a[j] = tmp;
   }
   return a;
 }
 
-function assignAgents(): Map<AgentLabel, AgentType> {
-  const shuffled = shuffle(ALL_AGENTS);
+function assignAgents(agentTypes: AgentType[]): Map<AgentLabel, AgentType> {
+  const shuffled = shuffle(agentTypes);
   const map = new Map<AgentLabel, AgentType>();
-  AGENT_LABELS.forEach((label, i) => map.set(label, shuffled[i]));
+  const labels = AGENT_LABELS.slice(0, shuffled.length);
+  labels.forEach((label, i) => map.set(label, shuffled[i]!));
   return map;
 }
 
@@ -53,6 +74,11 @@ function nameFromFile(filePath: string): string {
   return basename(filePath, ".md").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
 }
 
+function elapsed(startMs: number): string {
+  const sec = Math.round((Date.now() - startMs) / 1000);
+  return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m${sec % 60}s`;
+}
+
 // ── Interactive problem discussion ──
 
 async function interactiveMode(): Promise<{ name: string; problem: string }> {
@@ -61,36 +87,39 @@ async function interactiveMode(): Promise<{ name: string; problem: string }> {
   console.log("  Type /run when ready to start the consensus.\n");
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const prompt = (q: string): Promise<string> =>
+  const ask = (q: string): Promise<string> =>
     new Promise((res) => rl.question(q, res));
 
   const history: Array<{ role: "user" | "assistant"; text: string }> = [];
-  const agent = getAgent("claude");
+  const analyst = createAgent("claude", process.cwd());
 
-  while (true) {
-    const userInput = await prompt("\x1b[36myou>\x1b[0m ");
+  try {
+    while (true) {
+      const userInput = await ask(`${CYAN}you>${RESET} `);
 
-    if (userInput.trim() === "/run") {
-      // Ask analyst to produce the final structured output
-      const finalPrompt = buildConversation(history) +
-        "\n\nThe user is ready. Output the final structured problem now using the ---NAME--- and ---PROBLEM--- format.";
-      const output = await agent.run(process.cwd(), finalPrompt);
-      rl.close();
-      return parseAnalystOutput(output);
+      if (userInput.trim() === "/run") {
+        const finalPrompt = buildConversation(history) +
+          "\n\nThe user is ready. Output the final structured problem now using the ---NAME--- and ---PROBLEM--- format.";
+        const output = await analyst.prompt(finalPrompt);
+        rl.close();
+        return parseAnalystOutput(output);
+      }
+
+      if (userInput.trim() === "/quit" || userInput.trim() === "/exit") {
+        rl.close();
+        process.exit(0);
+      }
+
+      history.push({ role: "user", text: userInput });
+
+      const conversationPrompt = buildConversation(history);
+      const response = await analyst.prompt(conversationPrompt);
+
+      history.push({ role: "assistant", text: response });
+      console.log(`\n${YELLOW}analyst>${RESET} ${response}\n`);
     }
-
-    if (userInput.trim() === "/quit" || userInput.trim() === "/exit") {
-      rl.close();
-      process.exit(0);
-    }
-
-    history.push({ role: "user", text: userInput });
-
-    const conversationPrompt = buildConversation(history);
-    const response = await agent.run(process.cwd(), conversationPrompt);
-
-    history.push({ role: "assistant", text: response });
-    console.log(`\n\x1b[33manalyst>\x1b[0m ${response}\n`);
+  } finally {
+    await analyst.close();
   }
 }
 
@@ -113,154 +142,173 @@ function parseAnalystOutput(output: string): { name: string; problem: string } {
 
 // ── Round summaries ──
 
-async function showRoundSummary(baseDir: string, round: number) {
-  const roundDir = resolve(baseDir, `r${round}`);
-  const agent = getAgent("claude");
+async function showRoundSummary(solutions: Map<string, string>, round: number) {
+  const summarizer = createAgent("claude", process.cwd());
   console.log(`\n${DIM}  Summarizing round ${round}...${RESET}`);
-  const summary = await agent.run(roundDir, ROUND_SUMMARY_PROMPT);
-  console.log(`\n${BOLD}  ── Round ${round} summary ──${RESET}\n`);
-  // Indent each line of the summary
-  for (const line of summary.split("\n")) {
-    console.log(`  ${line}`);
+  try {
+    const prompt = buildRoundSummaryPrompt(solutions);
+    const summary = await summarizer.prompt(prompt);
+    console.log(`\n${BOLD}  ── Round ${round} summary ──${RESET}\n`);
+    for (const line of summary.split("\n")) {
+      console.log(`  ${line}`);
+    }
+    console.log();
+  } finally {
+    await summarizer.close();
   }
-  console.log();
-}
-
-function elapsed(startMs: number): string {
-  const sec = Math.round((Date.now() - startMs) / 1000);
-  return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m${sec % 60}s`;
 }
 
 // ── Consensus rounds ──
 
-async function runRound1(baseDir: string, problemPath: string) {
+async function runRound1(
+  baseDir: string,
+  problemContent: string,
+  agents: Map<AgentLabel, Agent>,
+  assignment: Map<AgentLabel, AgentType>,
+) {
   console.log(`\n${BOLD}=== Round 1: Independent solutions ===${RESET}\n`);
-
-  const assignment = assignAgents();
-  const problem = await readFile(problemPath);
+  logAssignment(assignment);
   const roundStart = Date.now();
 
-  for (const label of AGENT_LABELS) {
-    const dir = resolve(baseDir, "r1", label);
-    await ensureDir(dir);
-    await writeFile(resolve(dir, "problem.md"), problem);
-  }
+  const labels = [...agents.keys()];
+  console.log(`  ${DIM}${labels.length} agents working in parallel...${RESET}\n`);
 
-  console.log(`  ${DIM}4 agents working in parallel...${RESET}\n`);
+  const solutions = new Map<string, string>();
 
   await Promise.all(
-    AGENT_LABELS.map(async (label) => {
-      const agentType = assignment.get(label)!;
-      const agent = getAgent(agentType);
+    labels.map(async (label) => {
+      const agent = agents.get(label)!;
       const dir = resolve(baseDir, "r1", label);
+      await ensureDir(dir);
+
       const start = Date.now();
-      const output = await agent.run(dir, ROUND1_PROMPT);
-      if (!(await Bun.file(resolve(dir, "solution.md")).exists())) {
-        await writeFile(resolve(dir, "solution.md"), output);
-      }
+      const prompt = buildRound1Prompt(problemContent);
+      const output = await agent.prompt(prompt);
+
+      await writeFile(resolve(dir, "solution.md"), output);
+      solutions.set(label, output);
       const size = Math.round(output.length / 1024);
       console.log(`  ${GREEN}✓${RESET} ${agent.name} finished ${DIM}(${elapsed(start)}, ${size}kb)${RESET}`);
     })
   );
 
   console.log(`\n  ${DIM}Round 1 total: ${elapsed(roundStart)}${RESET}`);
-  await showRoundSummary(baseDir, 1);
+  await showRoundSummary(solutions, 1);
+
+  return solutions;
 }
 
-async function runRound(baseDir: string, round: number, problemPath: string) {
+async function runRound(
+  baseDir: string,
+  round: number,
+  problemContent: string,
+  agents: Map<AgentLabel, Agent>,
+  assignment: Map<AgentLabel, AgentType>,
+  prevSolutions: Map<string, string>,
+) {
   console.log(`${BOLD}=== Round ${round}: Compare & improve ===${RESET}\n`);
-
-  const prevRound = round - 1;
-  const assignment = assignAgents();
-  const problem = await readFile(problemPath);
+  logAssignment(assignment);
   const roundStart = Date.now();
 
-  for (const label of AGENT_LABELS) {
-    const dir = resolve(baseDir, `r${round}`, label);
-    await ensureDir(dir);
-    await writeFile(resolve(dir, "problem.md"), problem);
+  const labels = [...agents.keys()];
+  console.log(`  ${DIM}${labels.length} agents reviewing & improving...${RESET}\n`);
 
-    const otherLabels = shuffle(AGENT_LABELS.filter((l) => l !== label));
-    for (let i = 0; i < otherLabels.length; i++) {
-      await copyFile(
-        resolve(baseDir, `r${prevRound}`, otherLabels[i], "solution.md"),
-        resolve(dir, `solution-${i + 1}.md`)
-      );
-    }
-  }
-
-  console.log(`  ${DIM}4 agents reviewing & improving...${RESET}\n`);
+  const solutions = new Map<string, string>();
 
   await Promise.all(
-    AGENT_LABELS.map(async (label) => {
-      const agentType = assignment.get(label)!;
-      const agent = getAgent(agentType);
+    labels.map(async (label) => {
+      const agent = agents.get(label)!;
       const dir = resolve(baseDir, `r${round}`, label);
+      await ensureDir(dir);
+
+      // Gather other agents' solutions (shuffled, anonymous)
+      const otherLabels = shuffle(labels.filter((l) => l !== label));
+      const peerSolutions = otherLabels.map((l) => prevSolutions.get(l)!);
+
       const start = Date.now();
-      const output = await agent.run(dir, ROUND2_PROMPT);
-      if (!(await Bun.file(resolve(dir, "solution.md")).exists())) {
-        await writeFile(resolve(dir, "solution.md"), output);
-      }
+      const prompt = buildRound2Prompt(problemContent, peerSolutions);
+      const output = await agent.prompt(prompt);
+
+      await writeFile(resolve(dir, "solution.md"), output);
+      solutions.set(label, output);
       const size = Math.round(output.length / 1024);
       console.log(`  ${GREEN}✓${RESET} ${agent.name} finished ${DIM}(${elapsed(start)}, ${size}kb)${RESET}`);
     })
   );
 
   console.log(`\n  ${DIM}Round ${round} total: ${elapsed(roundStart)}${RESET}`);
-  await showRoundSummary(baseDir, round);
+  await showRoundSummary(solutions, round);
+
+  return solutions;
 }
 
-async function runFinalReport(baseDir: string, problemPath: string) {
+async function runFinalReport(baseDir: string, problemContent: string, solutions: Map<string, string>) {
   console.log(`${BOLD}=== Final Report ===${RESET}\n`);
 
+  // Write final solutions to disk for human inspection
   const reportDir = resolve(baseDir, "final");
   await ensureDir(reportDir);
-
-  await copyFile(problemPath, resolve(reportDir, "problem.md"));
-
-  for (const label of AGENT_LABELS) {
-    await copyFile(
-      resolve(baseDir, `r${ROUNDS}`, label, "solution.md"),
-      resolve(reportDir, `solution-${label}.md`)
-    );
+  await writeFile(resolve(reportDir, "problem.md"), problemContent);
+  for (const [label, text] of solutions) {
+    await writeFile(resolve(reportDir, `solution-${label}.md`), text);
   }
 
-  const agent = getAgent("claude");
+  const analyst = createAgent("claude", process.cwd());
   const start = Date.now();
   console.log(`  ${DIM}Analyzing consensus...${RESET}\n`);
-  const output = await agent.run(reportDir, FINAL_REPORT_PROMPT);
 
-  const reportPath = resolve(baseDir, "final-report.md");
-  if (await Bun.file(resolve(reportDir, "final-report.md")).exists()) {
-    await copyFile(resolve(reportDir, "final-report.md"), reportPath);
-  } else {
-    await writeFile(reportPath, output);
+  try {
+    const rounds: RoundHistory[] = [{ round: 3, title: "Final", solutions }];
+    const prompt = buildFinalReportPrompt(problemContent, rounds);
+    const report = await analyst.prompt(prompt);
+
+    const reportPath = resolve(baseDir, "final-report.md");
+    await writeFile(reportPath, report);
+    await writeFile(resolve(reportDir, "final-report.md"), report);
+
+    console.log(`  ${GREEN}✓${RESET} Final report ready ${DIM}(${elapsed(start)})${RESET}`);
+    console.log(`  ${reportPath}`);
+  } finally {
+    await analyst.close();
   }
-
-  console.log(`  ${GREEN}✓${RESET} Final report ready ${DIM}(${elapsed(start)})${RESET}`);
-  console.log(`  ${reportPath}`);
 }
 
 // ── Run consensus pipeline ──
 
-async function runConsensus(problemContent: string, sessionName: string) {
+async function runConsensus(problemContent: string, sessionName: string, agentTypes: AgentType[]) {
   const baseDir = resolve(process.cwd(), "sessions", sessionName);
   await ensureDir(baseDir);
-
-  const problemPath = resolve(baseDir, "problem.md");
-  await writeFile(problemPath, problemContent);
+  await writeFile(resolve(baseDir, "problem.md"), problemContent);
 
   console.log(`\nConsensus session: ${baseDir}`);
-  console.log(`Agents: ${ALL_AGENTS.join(", ")}`);
+  console.log(`Agents: ${agentTypes.join(", ")}`);
   console.log(`Rounds: ${ROUNDS}`);
+  console.log(`Mode: ${process.env.CONSILIUM_LEGACY === "1" ? "legacy (CLI)" : "ACP"}`);
 
-  await runRound1(baseDir, problemPath);
+  // Create agents — one per type, reused across rounds
+  const assignment = assignAgents(agentTypes);
+  const agents = new Map<AgentLabel, Agent>();
 
-  for (let round = 2; round <= ROUNDS; round++) {
-    await runRound(baseDir, round, problemPath);
+  console.log(`\n  ${DIM}Starting agents...${RESET}`);
+  for (const [label, agentType] of assignment) {
+    agents.set(label, createAgent(agentType, baseDir));
   }
 
-  await runFinalReport(baseDir, problemPath);
+  try {
+    // Round 1: independent solutions
+    let solutions = await runRound1(baseDir, problemContent, agents, assignment);
+
+    // Rounds 2..N: compare & improve
+    for (let round = 2; round <= ROUNDS; round++) {
+      solutions = await runRound(baseDir, round, problemContent, agents, assignment, solutions);
+    }
+
+    // Final report
+    await runFinalReport(baseDir, problemContent, solutions);
+  } finally {
+    // Always clean up agent processes
+    await Promise.all([...agents.values()].map((a) => a.close()));
+  }
 
   console.log(`\nDone! See ${baseDir}/final-report.md`);
 }
@@ -268,7 +316,7 @@ async function runConsensus(problemContent: string, sessionName: string) {
 // ── Main ──
 
 async function main() {
-  const input = process.argv.slice(2).join(" ").trim();
+  const { agents: agentTypes, rest: input } = parseArgs(process.argv.slice(2));
   const date = new Date().toISOString().slice(0, 10);
 
   if (!input) {
@@ -276,7 +324,7 @@ async function main() {
     const { name, problem } = await interactiveMode();
     console.log(`\n  Problem: ${name}`);
     console.log(`  Starting consensus...\n`);
-    await runConsensus(problem, `${date}-${name}`);
+    await runConsensus(problem, `${date}-${name}`, agentTypes);
     return;
   }
 
@@ -287,17 +335,21 @@ async function main() {
     const filePath = resolve(process.cwd(), input);
     const problemContent = await readFile(filePath);
     console.log(`Using problem file: ${filePath}`);
-    await runConsensus(problemContent, `${date}-${nameFromFile(input)}`);
+    await runConsensus(problemContent, `${date}-${nameFromFile(input)}`, agentTypes);
   } else {
     // One-shot prompt: analyst structures, then run
     console.log("\n=== Problem Analysis ===\n");
-    const agent = getAgent("claude");
-    console.log(`  Analyst structuring the problem...`);
-    const prompt = `${ANALYST_SYSTEM}\n\nHuman: ${input}\n\nOutput the structured problem now using the ---NAME--- and ---PROBLEM--- format.`;
-    const output = await agent.run(process.cwd(), prompt);
-    const { name, problem } = parseAnalystOutput(output);
-    console.log(`  Problem: ${name}\n`);
-    await runConsensus(problem, `${date}-${name}`);
+    const analyst = createAgent("claude", process.cwd());
+    try {
+      console.log(`  Analyst structuring the problem...`);
+      const promptText = `${ANALYST_SYSTEM}\n\nHuman: ${input}\n\nOutput the structured problem now using the ---NAME--- and ---PROBLEM--- format.`;
+      const output = await analyst.prompt(promptText);
+      const { name, problem } = parseAnalystOutput(output);
+      console.log(`  Problem: ${name}\n`);
+      await runConsensus(problem, `${date}-${name}`, agentTypes);
+    } finally {
+      await analyst.close();
+    }
   }
 }
 
