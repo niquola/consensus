@@ -315,6 +315,14 @@ export async function handleStart(name: string, sessionName: string, problem: st
   await ensureDir(session.sessionDir);
   await writeFileSafe(resolve(session.sessionDir, "problem.md"), problem);
 
+  // Write AGENTS.md to session dir
+  if (session.prompts!.agents) {
+    await writeFileSafe(resolve(session.sessionDir, "AGENTS.md"), session.prompts!.agents);
+    // Create CLAUDE.md linking to AGENTS.md so Claude Code reads it automatically
+    await writeFileSafe(resolve(session.sessionDir, "CLAUDE.md"),
+      `Read and follow the instructions in AGENTS.md in this directory.\n`);
+  }
+
   // Fill problem into prompts and save
   session.prompts!.problem = problem;
   await writeFileSafe(resolve(session.sessionDir, "prompts.md"), serializePrompts(session.prompts!));

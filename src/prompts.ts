@@ -10,6 +10,7 @@ export interface SessionPrompts {
   round3: string;
   summary: string;
   report: string;
+  agents: string;
 }
 
 export interface RoundHistory {
@@ -20,7 +21,7 @@ export interface RoundHistory {
 
 // ── Parse / Serialize prompts.md format ──
 
-const SECTIONS = ["problem", "analyst", "round1", "round2", "round3", "summary", "report"] as const;
+const SECTIONS = ["problem", "analyst", "round1", "round2", "round3", "summary", "report", "agents"] as const;
 
 export function parsePrompts(text: string): SessionPrompts {
   const result: Record<string, string> = {};

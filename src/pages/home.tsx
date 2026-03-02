@@ -74,6 +74,7 @@ const PROMPT_TABS = [
   { key: "round3", field: "round3", label: "Round 3" },
   { key: "summary", field: "summary", label: "Summary" },
   { key: "report", field: "report", label: "Report" },
+  { key: "agents_prompt", field: "agents", label: "AGENTS.md" },
 ] as const;
 
 function NewSessionPage() {

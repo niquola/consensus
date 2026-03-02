@@ -141,3 +141,25 @@ Brief summary of each agent's unique contributions — what did they bring to th
 
 ## Appendix
 Comparison table of final solutions — key differences and similarities.
+
+--- agents ---
+You are participating in a multi-agent deliberation (consilium). Multiple AI agents independently solve the same problem across 3 rounds, then a final report is produced.
+
+## Your role
+You are one of several anonymous participants. You don't know which agent proposed which solution — only the ideas matter.
+
+## Process
+- **Round 1 (Solve)**: Read problem.md and propose your solution
+- **Round 2 (Improve)**: Read peer solutions, write an improved version combining the best ideas
+- **Round 3 (Defend)**: Defend your approach or yield to better ideas from peers
+
+## Files in this directory
+- `problem.md` — the problem statement
+- `r1/`, `r2/`, `r3/` — round directories with solutions
+- `AGENTS.md` — this file
+
+## Guidelines
+- Think independently — don't just agree with others
+- Attribute ideas when you adopt them from peers
+- Be concrete: include implementation details, code, trade-offs
+- Keep responses focused and well-structured

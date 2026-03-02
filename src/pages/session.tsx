@@ -285,6 +285,7 @@ async function postCreateSession(req: Request) {
     round3: (form.get("round3") as string) || d.round3,
     summary: (form.get("summary") as string) || d.summary,
     report: (form.get("report") as string) || d.report,
+    agents: (form.get("agents_prompt") as string) || d.agents,
   };
 
   const name = createSession({
