@@ -21,7 +21,7 @@ function ChatMsg({ role, text }: { role: string; text: string }) {
   const align = role === "user" ? "ml-auto" : "";
   const bg = role === "user" ? "bg-blue-500/10 border-blue-500/20" : "bg-gray-900 border-gray-800";
   return (
-    <div class={`p-2.5 rounded-md border text-xs leading-relaxed max-w-[85%] ${align} ${bg} mb-2`}>
+    <div class={`p-2.5 rounded-md border max-w-[85%] ${align} ${bg} mb-2 ${role === "user" ? "text-xs" : "prose prose-sm prose-invert max-w-none"}`}>
       {role === "user" ? esc(text) : renderMarkdown(text)}
     </div>
   );
@@ -33,7 +33,7 @@ export function chatMsgHtml(role: string, text: string): string {
 
 export function streamHtml(text: string): string {
   if (!text) return `<span class="text-gray-600 text-xs">...</span>`;
-  return `<div class="p-2.5 rounded-md border bg-gray-900 border-gray-800 text-xs leading-relaxed max-w-[85%] mb-2">${renderMarkdown(text)}</div>`;
+  return `<div class="p-2.5 rounded-md border bg-gray-900 border-gray-800 max-w-[85%] mb-2 prose prose-sm prose-invert max-w-none">${renderMarkdown(text)}</div>`;
 }
 
 export function logEntryHtml(cls: string, content: string, opts?: { id?: string; oob?: boolean }): string {
@@ -83,7 +83,7 @@ export function artifactsSidebarHtml(name: string, artifacts: Artifact[], assign
   }
 
   // Rounds
-  const roundNames: Record<number, string> = { 1: "Solve", 2: "Improve", 3: "Defend" };
+  const roundNames: Record<number, string> = { 1: "Solve", 2: "Compare & Defend" };
   for (let r = 1; r <= maxRound; r++) {
     html += `<div class="mb-3"><div class="text-[10px] text-gray-600 uppercase tracking-wide mb-1 px-2">Round ${r} — ${roundNames[r] || ""}</div>`;
 
@@ -209,7 +209,7 @@ function ProgressPhase({ name }: { name: string }) {
           <div id="artifacts" sse-swap="artifacts" hx-swap="innerHTML"></div>
         </div>
       }>
-      <div id="content" class="prose-sm">
+      <div id="content" class="prose prose-sm prose-invert max-w-none">
         <p class="text-gray-500 text-sm">Select an artifact from the sidebar.</p>
       </div>
       {sseRedirectScript(eventsUrl)}
@@ -234,7 +234,7 @@ async function DonePage({ name }: { name: string }) {
 
   return (
     <SidebarLayout title={`${name} — Consilium`} sidebar={sidebar}>
-      <div id="content" class="prose-sm">
+      <div id="content" class="prose prose-sm prose-invert max-w-none">
         {content || <p class="text-gray-500">Select an artifact from the sidebar.</p>}
       </div>
     </SidebarLayout>
@@ -282,7 +282,6 @@ async function postCreateSession(req: Request) {
     analyst: (form.get("analyst_prompt") as string) || d.analyst,
     round1: (form.get("round1") as string) || d.round1,
     round2: (form.get("round2") as string) || d.round2,
-    round3: (form.get("round3") as string) || d.round3,
     summary: (form.get("summary") as string) || d.summary,
     report: (form.get("report") as string) || d.report,
     agents: (form.get("agents_prompt") as string) || d.agents,

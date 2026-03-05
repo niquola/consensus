@@ -7,7 +7,6 @@ export interface SessionPrompts {
   analyst: string;
   round1: string;
   round2: string;
-  round3: string;
   summary: string;
   report: string;
   agents: string;
@@ -21,7 +20,7 @@ export interface RoundHistory {
 
 // ── Parse / Serialize prompts.md format ──
 
-const SECTIONS = ["problem", "analyst", "round1", "round2", "round3", "summary", "report", "agents"] as const;
+const SECTIONS = ["problem", "analyst", "round1", "round2", "summary", "report", "agents"] as const;
 
 export function parsePrompts(text: string): SessionPrompts {
   const result: Record<string, string> = {};
@@ -149,24 +148,6 @@ export function buildRound2Prompt(problem: string, peerSolutions: string[], lang
     .join("\n\n---\n\n");
   const t = template || DEFAULTS.round2;
   return t.replace("{problem}", problem).replace("{peer_solutions}", blocks) + langSuffix(lang);
-}
-
-export function buildRound3Prompt(
-  problem: string,
-  ownSolution: string,
-  peerSolutions: string[],
-  lang?: string,
-  template?: string,
-): string {
-  const blocks = peerSolutions
-    .map((s, i) => `### Peer Solution ${i + 1}\n\n${s}`)
-    .join("\n\n---\n\n");
-  const t = template || DEFAULTS.round3;
-  return t
-    .replace("{problem}", problem)
-    .replace("{own_solution}", ownSolution)
-    .replace("{peer_solutions}", blocks)
-    + langSuffix(lang);
 }
 
 export function buildRoundSummaryPrompt(solutions: Map<string, string>, lang?: string, template?: string): string {

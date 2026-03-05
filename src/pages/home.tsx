@@ -71,7 +71,6 @@ const PROMPT_TABS = [
   { key: "analyst_prompt", field: "analyst", label: "Analyst" },
   { key: "round1", field: "round1", label: "Round 1" },
   { key: "round2", field: "round2", label: "Round 2" },
-  { key: "round3", field: "round3", label: "Round 3" },
   { key: "summary", field: "summary", label: "Summary" },
   { key: "report", field: "report", label: "Report" },
   { key: "agents_prompt", field: "agents", label: "AGENTS.md" },

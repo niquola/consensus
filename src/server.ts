@@ -5,7 +5,6 @@ import {
   buildAnalystChatPrompt,
   buildRound1Prompt,
   buildRound2Prompt,
-  buildRound3Prompt,
   buildRoundSummaryPrompt,
   buildFinalReportPrompt,
   serializePrompts,
@@ -486,26 +485,15 @@ async function runConsensus(name: string, session: ActiveSession, problem: strin
     allFailed.push(...failed.map(l => `r1:${l}`));
     allRounds.push({ round: 1, title: "Solve", solutions: new Map(solutions) });
 
-    // Round 2: Improve
+    // Round 2: Compare & Defend
     const r1Solutions = solutions;
-    ({ solutions, failed } = await executeRound(2, "Improve", (label) => {
+    ({ solutions, failed } = await executeRound(2, "Compare & Defend", (label) => {
       const otherLabels = shuffle(labels.filter(l => l !== label));
       const peerSolutions = otherLabels.map(l => r1Solutions.get(l)!).filter(Boolean);
       return buildRound2Prompt(problem, peerSolutions, lang, prompts?.round2);
     }));
     allFailed.push(...failed.map(l => `r2:${l}`));
-    allRounds.push({ round: 2, title: "Improve", solutions: new Map(solutions) });
-
-    // Round 3: Defend
-    const r2Solutions = solutions;
-    ({ solutions, failed } = await executeRound(3, "Defend", (label) => {
-      const ownSolution = r2Solutions.get(label) || "";
-      const otherLabels = shuffle(labels.filter(l => l !== label));
-      const peerSolutions = otherLabels.map(l => r2Solutions.get(l)!).filter(Boolean);
-      return buildRound3Prompt(problem, ownSolution, peerSolutions, lang, prompts?.round3);
-    }));
-    allFailed.push(...failed.map(l => `r3:${l}`));
-    allRounds.push({ round: 3, title: "Defend", solutions: new Map(solutions) });
+    allRounds.push({ round: 2, title: "Compare & Defend", solutions: new Map(solutions) });
 
     // Final Report
     if (await Bun.file(resolve(baseDir, "final-report.md")).exists()) {
@@ -612,7 +600,7 @@ export async function listSessionArtifacts(name: string): Promise<Artifact[]> {
     artifacts.push({ path: "problem.md", type: "problem" });
   }
 
-  for (let r = 1; r <= 3; r++) {
+  for (let r = 1; r <= 2; r++) {
     for (const label of ["a", "b", "c", "d", "e"]) {
       if (await Bun.file(resolve(sdir, `r${r}`, label, "prompt.md")).exists()) {
         artifacts.push({ path: `r${r}/${label}/prompt.md`, type: "prompt", round: r, label });
@@ -646,54 +634,16 @@ export async function getSessionAssignment(name: string): Promise<Record<string,
 export function renderMarkdown(text: string): string {
   if (!text) return "";
 
-  // Extract code blocks first, replace with placeholders
-  const codeBlocks: string[] = [];
-  let result = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, lang: string, code: string) => {
-    const idx = codeBlocks.length;
-    codeBlocks.push(highlightCode(code.trimEnd(), lang || undefined));
-    return `\x00CODE${idx}\x00`;
-  });
+  let html = Bun.markdown.html(text);
 
-  // Escape HTML in remaining text
-  result = result
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Replace <pre><code class="language-X">...</code></pre> with shiki-highlighted blocks
+  html = html.replace(
+    /<pre><code class="language-(\w+)">([\s\S]*?)<\/code><\/pre>/g,
+    (_m, lang: string, code: string) => {
+      const decoded = code.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
+      return highlightCode(decoded.trimEnd(), lang);
+    },
+  );
 
-  // Inline code
-  result = result.replace(/`([^`]+)`/g, '<code class="bg-gray-800 px-1 rounded text-xs">$1</code>');
-
-  // Headings
-  result = result
-    .replace(/^#### (.+)$/gm, '<h4 class="text-gray-200 text-xs font-semibold mt-3 mb-1">$1</h4>')
-    .replace(/^### (.+)$/gm, '<h3 class="text-gray-200 text-sm font-semibold mt-3 mb-1">$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2 class="text-blue-400 text-sm font-semibold mt-4 mb-1">$1</h2>');
-
-  // Emphasis
-  result = result
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>');
-
-  // Tables
-  result = result.replace(/^\|(.+)\|$/gm, (_m, inner) => {
-    const cells = inner.split("|").map((c: string) => c.trim());
-    if (cells.every((c: string) => /^[-:]+$/.test(c))) return "";
-    return "<tr>" + cells.map((c: string) => `<td class="border border-gray-700 px-2 py-1 text-xs">${c}</td>`).join("") + "</tr>";
-  });
-
-  // Lists
-  result = result
-    .replace(/^- (.+)$/gm, '<li class="ml-4 text-xs">$1</li>')
-    .replace(/^\d+\. (.+)$/gm, '<li class="ml-4 text-xs">$1</li>');
-
-  // Blockquotes
-  result = result.replace(/^&gt; (.+)$/gm, '<blockquote class="border-l-2 border-gray-700 pl-3 text-gray-500 my-2">$1</blockquote>');
-
-  // Paragraphs
-  result = result
-    .replace(/\n\n/g, "</p><p class=\"mb-2 text-xs leading-relaxed\">")
-    .replace(/^/, '<p class="mb-2 text-xs leading-relaxed">') + "</p>";
-
-  // Restore code blocks
-  result = result.replace(/\x00CODE(\d+)\x00/g, (_m, idx) => codeBlocks[Number(idx)]!);
-
-  return result;
+  return html;
 }

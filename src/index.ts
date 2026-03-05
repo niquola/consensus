@@ -29,7 +29,7 @@ const CYAN = "\x1b[36m";
 const YELLOW = "\x1b[33m";
 const BOLD = "\x1b[1m";
 
-const ROUNDS = 3;
+const ROUNDS = 2;
 
 // ── Helpers ──
 
